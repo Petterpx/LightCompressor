@@ -1,394 +1,111 @@
 package com.abedelazizshe.lightcompressorlibrary
 
-import android.content.ContentValues
+import android.annotation.SuppressLint
 import android.content.Context
-import android.content.Context.MODE_PRIVATE
-import android.database.Cursor
-import android.net.Uri
-import android.os.Build
-import android.os.Environment
-import android.provider.MediaStore
-import androidx.annotation.RequiresApi
-import com.abedelazizshe.lightcompressorlibrary.compressor.Compressor.compressVideo
-import com.abedelazizshe.lightcompressorlibrary.compressor.Compressor.isRunning
-import com.abedelazizshe.lightcompressorlibrary.config.*
-import com.abedelazizshe.lightcompressorlibrary.video.Result
-import kotlinx.coroutines.*
+import com.abedelazizshe.lightcompressorlibrary.compressor.Compressor
+import com.abedelazizshe.lightcompressorlibrary.echo.CompressLister
+import com.abedelazizshe.lightcompressorlibrary.echo.CompressListerImpl
+import com.abedelazizshe.lightcompressorlibrary.echo.CompressConfig
+import com.abedelazizshe.lightcompressorlibrary.echo.checkOrCreateFolderFile
+import com.abedelazizshe.lightcompressorlibrary.echo.convertSafePath
+import com.abedelazizshe.lightcompressorlibrary.video.CompressResult
+import com.luck.picture.lib.entity.LocalMedia
 import java.io.File
-import java.io.FileInputStream
-import java.io.FileOutputStream
-import java.io.IOException
 
 
-enum class VideoQuality {
-    VERY_HIGH, HIGH, MEDIUM, LOW, VERY_LOW
-}
+/**
+ * Echo视频压缩
+ * @author petterp
+ */
+@SuppressLint("StaticFieldLeak")
+object VideoCompressor {
 
-object VideoCompressor : CoroutineScope by MainScope() {
+    internal lateinit var context: Context
 
-    private var job: Job? = null
-
-    /**
-     * This function compresses a given list of [uris] of video files and writes the compressed
-     * video file at [SharedStorageConfiguration.saveAt] directory, or at [AppSpecificStorageConfiguration.subFolderName]
-     *
-     * The source videos should be provided content uris.
-     *
-     * Only [sharedStorageConfiguration] or [appSpecificStorageConfiguration] must be specified at a
-     * time. Passing both will throw an Exception.
-     *
-     * @param [context] the application context.
-     * @param [uris] the list of content Uris of the video files.
-     * @param [isStreamable] determines if the output video should be prepared for streaming.
-     * @param [sharedStorageConfiguration] configuration for the path directory where the compressed
-     * videos will be saved, and the name of the file
-     * @param [appSpecificStorageConfiguration] configuration for the path directory where the compressed
-     * videos will be saved, the name of the file, and any sub-folders name. The library won't create the subfolder
-     * and will throw an exception if the subfolder does not exist.
-     * @param [listener] a compression listener that listens to compression [CompressionListener.onStart],
-     * [CompressionListener.onProgress], [CompressionListener.onFailure], [CompressionListener.onSuccess]
-     * and if the compression was [CompressionListener.onCancelled]
-     * @param [configureWith] to allow add video compression configuration that could be:
-     * [Configuration.quality] to allow choosing a video quality that can be [VideoQuality.LOW],
-     * [VideoQuality.MEDIUM], [VideoQuality.HIGH], and [VideoQuality.VERY_HIGH].
-     * This defaults to [VideoQuality.MEDIUM]
-     * [Configuration.isMinBitrateCheckEnabled] to determine if the checking for a minimum bitrate threshold
-     * before compression is enabled or not. This default to `true`
-     * [Configuration.videoBitrateInMbps] which is a custom bitrate for the video. You might consider setting
-     * [Configuration.isMinBitrateCheckEnabled] to `false` if your bitrate is less than 2000000.
-     *  * [Configuration.keepOriginalResolution] to keep the original video height and width when compressing.
-     * This defaults to `false`
-     * [Configuration.videoHeight] which is a custom height for the video. Must be specified with [Configuration.videoWidth]
-     * [Configuration.videoWidth] which is a custom width for the video. Must be specified with [Configuration.videoHeight]
-     */
-    @JvmStatic
-    @JvmOverloads
-    fun start(
-        context: Context,
-        uris: List<Uri>,
-        isStreamable: Boolean = false,
-        sharedStorageConfiguration: SharedStorageConfiguration? = null,
-        appSpecificStorageConfiguration: AppSpecificStorageConfiguration? = null,
-        configureWith: Configuration,
-        listener: CompressionListener,
-    ) {
-        // Only one is allowed
-        assert(sharedStorageConfiguration == null || appSpecificStorageConfiguration == null)
-        assert(configureWith.videoNames.size == uris.size)
-
-        doVideoCompression(
-            context,
-            uris,
-            isStreamable,
-            sharedStorageConfiguration,
-            appSpecificStorageConfiguration,
-            configureWith,
-            listener,
-        )
+    fun init(context: Context) {
+        this.context = context
     }
 
-    /**
-     * Call this function to cancel video compression process which will call [CompressionListener.onCancelled]
-     */
-    @JvmStatic
-    fun cancel() {
-        job?.cancel()
-        isRunning = false
+    private fun defaultOutputPath(): String {
+        val fileParent = context.filesDir.absolutePath
+        fileParent.checkOrCreateFolderFile()
+        val file = File(fileParent, "compress-${System.currentTimeMillis()}.mp4")
+        return file.absolutePath
     }
 
-    private fun doVideoCompression(
-        context: Context,
-        uris: List<Uri>,
-        isStreamable: Boolean,
-        sharedStorageConfiguration: SharedStorageConfiguration?,
-        appSpecificStorageConfiguration: AppSpecificStorageConfiguration?,
-        configuration: Configuration,
-        listener: CompressionListener,
-    ) {
-        var streamableFile: File? = null
-        for (i in uris.indices) {
-
-            job = launch(Dispatchers.IO) {
-
-                val job = async { getMediaPath(context, uris[i]) }
-                val path = job.await()
-
-                val desFile = saveVideoFile(
-                    context,
-                    path,
-                    sharedStorageConfiguration,
-                    appSpecificStorageConfiguration,
-                    isStreamable,
-                    configuration.videoNames[i],
-                    shouldSave = false
-                )
-
-                if (isStreamable)
-                    streamableFile = saveVideoFile(
-                        context,
-                        path,
-                        sharedStorageConfiguration,
-                        appSpecificStorageConfiguration,
-                        null,
-                        configuration.videoNames[i],
-                        shouldSave = false
-                    )
-
-                desFile?.let {
-                    isRunning = true
-                    listener.onStart(i)
-                    val result = startCompression(
-                        i,
-                        context,
-                        uris[i],
-                        desFile.path,
-                        streamableFile?.path,
-                        configuration,
-                        listener,
-                    )
-
-                    // Runs in Main(UI) Thread
-                    if (result.success) {
-                        val savedFile = saveVideoFile(
-                            context,
-                            result.path,
-                            sharedStorageConfiguration,
-                            appSpecificStorageConfiguration,
-                            isStreamable,
-                            configuration.videoNames[i],
-                            shouldSave = true
-                        )
-
-                        listener.onSuccess(i, result.size, savedFile?.path)
-                    } else {
-                        listener.onFailure(i, result.failureMessage ?: "An error has occurred!")
-                    }
-                }
-            }
+    suspend fun start(
+        models: List<CompressConfig>,
+        enableDebug: Boolean,
+        listener: (CompressLister.() -> Unit)?
+    ): List<CompressResult> {
+        return models.map {
+            start(it, enableDebug, listener)
         }
     }
 
-    private suspend fun startCompression(
-        index: Int,
-        context: Context,
-        srcUri: Uri,
-        destPath: String,
-        streamableFile: String? = null,
-        configuration: Configuration,
-        listener: CompressionListener,
-    ): Result = withContext(Dispatchers.Default) {
-        return@withContext compressVideo(
-            index,
-            context,
-            srcUri,
-            destPath,
-            streamableFile,
-            configuration,
-            object : CompressionProgressListener {
-                override fun onProgressChanged(index: Int, percent: Float) {
-                    listener.onProgress(index, percent)
-                }
-
-                override fun onProgressCancelled(index: Int) {
-                    listener.onCancelled(index)
-                }
-            },
-        )
-    }
-
-    private fun saveVideoFile(
-        context: Context,
-        filePath: String?,
-        sharedStorageConfiguration: SharedStorageConfiguration?,
-        appSpecificStorageConfiguration: AppSpecificStorageConfiguration?,
-        isStreamable: Boolean?,
-        videoName: String,
-        shouldSave: Boolean?
-    ): File? {
-        filePath?.let {
-            val videoFile = File(filePath)
-
-            if (sharedStorageConfiguration != null) {
-                val videoFileName = validatedFileName(
-                    videoName,
-                    isStreamable
-                )
-
-                val saveLocation =
-                    when (sharedStorageConfiguration.saveAt) {
-                        SaveLocation.downloads -> {
-                            Environment.DIRECTORY_DOWNLOADS
-                        }
-
-                        SaveLocation.pictures -> {
-                            Environment.DIRECTORY_PICTURES
-                        }
-
-                        else -> {
-                            Environment.DIRECTORY_MOVIES
-                        }
-                    }
-
-                if (Build.VERSION.SDK_INT >= 29) {
-                    val fullPath =
-                        if (sharedStorageConfiguration.subFolderName != null) "$saveLocation/${sharedStorageConfiguration.subFolderName}"
-                        else saveLocation
-                    if (shouldSave == true) {
-                        saveVideoInExternal(context, videoFileName, fullPath, videoFile)
-                        File(context.filesDir, videoFileName).delete()
-                        return File("/storage/emulated/0/${fullPath}", videoFileName)
-                    }
-                    return File(context.filesDir, videoFileName)
-                } else {
-                    val savePath =
-                        Environment.getExternalStoragePublicDirectory(saveLocation)
-
-                    val fullPath =
-                        if (sharedStorageConfiguration.subFolderName != null) "$savePath/${sharedStorageConfiguration.subFolderName}"
-                        else savePath.path
-
-                    val desFile = File(fullPath, videoFileName)
-
-                    if (!desFile.exists()) {
-                        try {
-                            desFile.parentFile?.mkdirs()
-                        } catch (e: IOException) {
-                            e.printStackTrace()
-                        }
-                    }
-
-                    if (shouldSave == true) {
-                        context.openFileOutput(videoFileName, MODE_PRIVATE)
-                            .use { outputStream ->
-                                FileInputStream(videoFile).use { inputStream ->
-                                    val buf = ByteArray(4096)
-                                    while (true) {
-                                        val sz = inputStream.read(buf)
-                                        if (sz <= 0) break
-                                        outputStream.write(buf, 0, sz)
-                                    }
-
-                                }
-                            }
-
-                    }
-                    return desFile
-                }
+    suspend fun start(
+        model: CompressConfig,
+        enableDebug: Boolean,
+        listener: (CompressLister.() -> Unit)? = null
+    ): CompressResult {
+        val id = model.id
+        val startTime = System.currentTimeMillis()
+        val listerImp = if (listener != null) CompressListerImpl().also(listener) else null
+        listerImp?.startListener?.invoke(id)
+        // 获取绝对路径,如果没有,那就先复制到缓存文件夹,后面会自动删除
+        Compressor.log.d("start compress, id:${model.id}")
+        var srcPath = model.filePath
+        return runCatching {
+            srcPath = srcPath.convertSafePath(context)
+            Compressor.compressVideo(
+                context,
+                srcPath,
+                model.outPathConfig?.outPath ?: defaultOutputPath(),
+                model
+            ).copy(time = System.currentTimeMillis() - startTime)
+        }.getOrElse {
+            val endTime = System.currentTimeMillis() - startTime
+            CompressResult(id, false, it.message, 0, time = endTime)
+        }.apply {
+            val file = File(this.path ?: "")
+            // 自动删除临时缓存的压缩文件，这本就是兜底的逻辑
+            // 如果未来想省去一步IO操作
+            checkOrDeleteCompressTempFile(model.filePath, srcPath)
+            if (success && file.length() > 1) {
+                outputLog(enableDebug, model.filePath, this)
+                listerImp?.successListener?.invoke(id, size, path, time)
             } else {
-                val videoFileName = validatedFileName(
-                    videoName,
-                    isStreamable
-                )
-
-                val fullPath =
-                    if (appSpecificStorageConfiguration!!.subFolderName != null) "${appSpecificStorageConfiguration.subFolderName}/$videoFileName"
-                    else videoFileName
-
-                if (!File("${context.filesDir}/$fullPath").exists()) {
-                    File("${context.filesDir}/$fullPath").parentFile?.mkdirs()
-                }
-
-                return File(context.filesDir, fullPath)
-
+                Compressor.log.e("start compress fail, id:${model.id},message:$failureMessage")
+                listerImp?.failureListener?.invoke(id, failureMessage ?: "compress failed")
             }
         }
-        return null
     }
 
-
-    @RequiresApi(Build.VERSION_CODES.Q)
-    private fun saveVideoInExternal(
-        context: Context,
-        videoFileName: String,
-        saveLocation: String,
-        videoFile: File
+    private fun outputLog(
+        isEnable: Boolean,
+        originPath: String,
+        result: CompressResult,
     ) {
-        val values = ContentValues().apply {
-
-            put(
-                MediaStore.Images.Media.DISPLAY_NAME,
-                videoFileName
-            )
-            put(MediaStore.Images.Media.MIME_TYPE, "video/mp4")
-            put(MediaStore.Images.Media.RELATIVE_PATH, saveLocation)
-            put(MediaStore.Images.Media.IS_PENDING, 1)
-        }
-
-        var collection =
-            MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-
-        if (saveLocation == Environment.DIRECTORY_DOWNLOADS) {
-            collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI
-        }
-
-        val fileUri = context.contentResolver.insert(collection, values)
-
-        fileUri?.let {
-            context.contentResolver.openFileDescriptor(fileUri, "rw")
-                .use { descriptor ->
-                    descriptor?.let {
-                        FileOutputStream(descriptor.fileDescriptor).use { out ->
-                            FileInputStream(videoFile).use { inputStream ->
-                                val buf = ByteArray(4096)
-                                while (true) {
-                                    val sz = inputStream.read(buf)
-                                    if (sz <= 0) break
-                                    out.write(buf, 0, sz)
-                                }
-                            }
-                        }
-                    }
-                }
-
-            values.clear()
-            values.put(MediaStore.Video.Media.IS_PENDING, 0)
-            context.contentResolver.update(fileUri, values, null, null)
-        }
+        if (!isEnable) return
+        val originMedia = LocalMedia.generateLocalMedia(context, originPath)
+        val compressMedia = LocalMedia.generateLocalMedia(context, result.path)
+        Compressor.log.d(
+            "compress End, id:${result.id}  \n" +
+                    "- time: [${result.time}]\n" +
+                    "- size: [${originMedia.size}] ->  [${compressMedia.size}] \n" +
+                    "- w,h:  [${originMedia.width},${originMedia.height}] -> [${compressMedia.width},${compressMedia.height}]" +
+                    "- srcPath: ${originPath}\n" +
+                    "- compressPath: ${result.path}\n" +
+                    "\n"
+        )
     }
 
-    private fun getMediaPath(context: Context, uri: Uri): String {
-
-        val resolver = context.contentResolver
-        val projection = arrayOf(MediaStore.Video.Media.DATA)
-        var cursor: Cursor? = null
-        try {
-            cursor = resolver.query(uri, projection, null, null, null)
-            return if (cursor != null) {
-                val columnIndex = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DATA)
-                cursor.moveToFirst()
-                cursor.getString(columnIndex)
-
-            } else throw Exception()
-
-        } catch (e: Exception) {
-            resolver.let {
-                val filePath = (context.applicationInfo.dataDir + File.separator
-                        + System.currentTimeMillis())
-                val file = File(filePath)
-
-                resolver.openInputStream(uri)?.use { inputStream ->
-                    FileOutputStream(file).use { outputStream ->
-                        val buf = ByteArray(4096)
-                        var len: Int
-                        while (inputStream.read(buf).also { len = it } > 0) outputStream.write(
-                            buf,
-                            0,
-                            len
-                        )
-                    }
-                }
-                return file.absolutePath
-            }
-        } finally {
-            cursor?.close()
+    private fun checkOrDeleteCompressTempFile(originPath: String, tempPath: String): Boolean {
+        kotlin.runCatching {
+            if (originPath == tempPath) return false
+            val tempFile = File(tempPath)
+            tempFile.delete()
         }
-    }
-
-    private fun validatedFileName(name: String, isStreamable: Boolean?): String {
-        val videoName = if (isStreamable == null || !isStreamable) name
-        else "${name}_temp"
-
-        if (!videoName.contains("mp4")) return "${videoName}.mp4"
-        return videoName
+        return true
     }
 }

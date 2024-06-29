@@ -6,15 +6,13 @@ import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
 import android.util.Log
-import com.abedelazizshe.lightcompressorlibrary.VideoQuality
 import com.abedelazizshe.lightcompressorlibrary.video.Mp4Movie
 import java.io.File
-import kotlin.math.roundToInt
 
 object CompressorUtils {
 
-    private const val MIN_HEIGHT = 640.0
-    private const val MIN_WIDTH = 368.0
+    private const val MIN_HEIGHT = 1280.0
+    private const val MIN_WIDTH = 720.0
 
     // 1 second between I-frames
     private const val I_FRAME_INTERVAL = 1
@@ -86,9 +84,6 @@ object CompressorUtils {
                 MediaFormat.KEY_BITRATE_MODE,
                 MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR
             )
-
-
-
             getColorStandard(inputFormat)?.let {
                 setInteger(MediaFormat.KEY_COLOR_STANDARD, it)
             }
@@ -171,68 +166,6 @@ object CompressorUtils {
             message = it
         }
         Log.e("Compressor", message, exception)
-    }
-
-    /**
-     * Get fixed bitrate value based on the file's current bitrate
-     * @param bitrate file's current bitrate
-     * @return new smaller bitrate value
-     */
-    fun getBitrate(
-        bitrate: Int,
-        quality: VideoQuality,
-    ): Int {
-        return when (quality) {
-            VideoQuality.VERY_LOW -> (bitrate * 0.1).roundToInt()
-            VideoQuality.LOW -> (bitrate * 0.2).roundToInt()
-            VideoQuality.MEDIUM -> (bitrate * 0.3).roundToInt()
-            VideoQuality.HIGH -> (bitrate * 0.4).roundToInt()
-            VideoQuality.VERY_HIGH -> (bitrate * 0.6).roundToInt()
-        }
-    }
-
-    /**
-     * Generate new width and height for source file
-     * @param width file's original width
-     * @param height file's original height
-     * @return new width and height pair
-     */
-    fun generateWidthAndHeight(
-        width: Double,
-        height: Double,
-        keepOriginalResolution: Boolean,
-    ): Pair<Int, Int> {
-
-        if (keepOriginalResolution) {
-            return Pair(width.roundToInt(), height.roundToInt())
-        }
-
-        val newWidth: Int
-        val newHeight: Int
-
-        when {
-            width >= 1920 || height >= 1920 -> {
-                newWidth = generateWidthHeightValue(width, 0.5)
-                newHeight = generateWidthHeightValue(height, 0.5)
-            }
-
-            width >= 1280 || height >= 1280 -> {
-                newWidth = generateWidthHeightValue(width, 0.75)
-                newHeight = generateWidthHeightValue(height, 0.75)
-            }
-
-            width >= 960 || height >= 960 -> {
-                newWidth = generateWidthHeightValue(width, 0.95)
-                newHeight = generateWidthHeightValue(height, 0.95)
-            }
-
-            else -> {
-                newWidth = generateWidthHeightValue(width, 0.9)
-                newHeight = generateWidthHeightValue(height, 0.9)
-            }
-        }
-
-        return Pair(newWidth, newHeight)
     }
 
     fun hasQTI(): Boolean {

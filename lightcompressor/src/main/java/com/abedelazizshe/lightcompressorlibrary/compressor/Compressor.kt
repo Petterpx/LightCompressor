@@ -5,21 +5,23 @@ import android.media.*
 import android.net.Uri
 import android.os.Build
 import android.util.Log
-import com.abedelazizshe.lightcompressorlibrary.CompressionProgressListener
-import com.abedelazizshe.lightcompressorlibrary.config.Configuration
+import com.abedelazizshe.lightcompressorlibrary.echo.Bitrate
+import com.abedelazizshe.lightcompressorlibrary.echo.CompressConfig
+import com.abedelazizshe.lightcompressorlibrary.echo.CompressId
+import com.abedelazizshe.lightcompressorlibrary.echo.CompressListerImpl
+import com.abedelazizshe.lightcompressorlibrary.echo.CompressEngineModel
+import com.abedelazizshe.lightcompressorlibrary.echo.Duration
+import com.abedelazizshe.lightcompressorlibrary.echo.isContentFile
 import com.abedelazizshe.lightcompressorlibrary.utils.CompressorUtils.findTrack
-import com.abedelazizshe.lightcompressorlibrary.utils.CompressorUtils.generateWidthAndHeight
-import com.abedelazizshe.lightcompressorlibrary.utils.CompressorUtils.getBitrate
 import com.abedelazizshe.lightcompressorlibrary.utils.CompressorUtils.hasQTI
 import com.abedelazizshe.lightcompressorlibrary.utils.CompressorUtils.prepareVideoHeight
 import com.abedelazizshe.lightcompressorlibrary.utils.CompressorUtils.prepareVideoWidth
 import com.abedelazizshe.lightcompressorlibrary.utils.CompressorUtils.printException
 import com.abedelazizshe.lightcompressorlibrary.utils.CompressorUtils.setOutputFileParameters
 import com.abedelazizshe.lightcompressorlibrary.utils.CompressorUtils.setUpMP4Movie
-import com.abedelazizshe.lightcompressorlibrary.utils.StreamableVideo
 import com.abedelazizshe.lightcompressorlibrary.video.*
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import com.orhanobut.logger.Logger
+import com.orhanobut.logger.Printer
 import java.io.File
 import java.nio.ByteBuffer
 
@@ -29,8 +31,9 @@ import java.nio.ByteBuffer
  */
 object Compressor {
 
-    // 2Mbps
-    private const val MIN_BITRATE = 2000000
+    private const val TAG = "VideoCompressor"
+    val log: Printer
+        get() = Logger.t(TAG)
 
     // H.264 Advanced Video Coding
     private const val MIME_TYPE = "video/avc"
@@ -43,37 +46,48 @@ object Compressor {
     var isRunning = true
 
     suspend fun compressVideo(
-        index: Int,
         context: Context,
-        srcUri: Uri,
+        srcPath: String,
         destination: String,
-        streamableFile: String?,
-        configuration: Configuration,
-        listener: CompressionProgressListener,
-    ): Result = withContext(Dispatchers.Default) {
-
+        config: CompressConfig,
+        listerImpl: CompressListerImpl? = null,
+    ): CompressResult {
         val extractor = MediaExtractor()
         // Retrieve the source's metadata to be used as input to generate new values for compression
         val mediaMetadataRetriever = MediaMetadataRetriever()
-
-        try {
-            mediaMetadataRetriever.setDataSource(context, srcUri)
-        } catch (exception: IllegalArgumentException) {
-            printException(exception)
-            return@withContext Result(
-                index,
-                success = false,
-                failureMessage = "${exception.message}"
-            )
+        if (srcPath.isContentFile()) {
+            val uri = Uri.parse(srcPath)
+            try {
+                mediaMetadataRetriever.setDataSource(context, uri)
+            } catch (exception: IllegalArgumentException) {
+                printException(exception)
+                return CompressResult(
+                    config.id,
+                    success = false,
+                    failureMessage = "${exception.message}"
+                )
+            }
+            runCatching {
+                extractor.setDataSource(context, uri, null)
+            }
+        } else {
+            try {
+                mediaMetadataRetriever.setDataSource(srcPath)
+            } catch (exception: IllegalArgumentException) {
+                printException(exception)
+                return CompressResult(
+                    config.id,
+                    success = false,
+                    failureMessage = "${exception.message}"
+                )
+            }
+            runCatching {
+                extractor.setDataSource(srcPath, null)
+            }
         }
+        var height: Double = prepareVideoHeight(mediaMetadataRetriever)
 
-        runCatching {
-            extractor.setDataSource(context, srcUri, null)
-        }
-
-        val height: Double = prepareVideoHeight(mediaMetadataRetriever)
-
-        val width: Double = prepareVideoWidth(mediaMetadataRetriever)
+        var width: Double = prepareVideoWidth(mediaMetadataRetriever)
 
         val rotationData =
             mediaMetadataRetriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)
@@ -87,8 +101,8 @@ object Compressor {
 
         if (rotationData.isNullOrEmpty() || bitrateData.isNullOrEmpty() || durationData.isNullOrEmpty()) {
             // Exit execution
-            return@withContext Result(
-                index,
+            return CompressResult(
+                config.id,
                 success = false,
                 failureMessage = "Failed to extract video meta-data, please try again"
             )
@@ -97,77 +111,59 @@ object Compressor {
         var (rotation, bitrate, duration) = try {
             Triple(rotationData.toInt(), bitrateData.toInt(), durationData.toLong() * 1000)
         } catch (e: java.lang.Exception) {
-            return@withContext Result(
-                index,
+            return CompressResult(
+                config.id,
                 success = false,
                 failureMessage = "Failed to extract video meta-data, please try again"
             )
         }
-
-        // Check for a min video bitrate before compression
-        // Note: this is an experimental value
-        if (configuration.isMinBitrateCheckEnabled && bitrate <= MIN_BITRATE)
-            return@withContext Result(index, success = false, failureMessage = INVALID_BITRATE)
-
-        //Handle new bitrate value
-        val newBitrate: Int =
-            if (configuration.videoBitrateInMbps == null) getBitrate(bitrate, configuration.quality)
-            else configuration.videoBitrateInMbps!! * 1000000
-
-        //Handle new width and height values
-        var (newWidth, newHeight) = if (configuration.videoHeight != null) Pair(
-            configuration.videoWidth?.toInt(),
-            configuration.videoHeight?.toInt()
-        )
-        else generateWidthAndHeight(
-            width,
-            height,
-            configuration.keepOriginalResolution
-        )
-
-        //Handle rotation values and swapping height and width if needed
         rotation = when (rotation) {
             90, 270 -> {
-                val tempHeight = newHeight
-                newHeight = newWidth
-                newWidth = tempHeight
+                val tempHeight = height
+                height = width
+                width = tempHeight
                 0
             }
 
             180 -> 0
             else -> rotation
         }
-
-        return@withContext start(
-            index,
-            newWidth!!,
-            newHeight!!,
+        val curModel =
+            CompressEngineModel(Bitrate(bitrate), width, height, Duration(duration))
+        val newModel = config.compressEngine.convert(curModel)
+        log.d("oldModel: $curModel\n newModel: $newModel")
+        if (curModel == newModel) {
+            return CompressResult(
+                config.id,
+                path = srcPath,
+                success = true,
+                failureMessage = "The video is already optimized"
+            )
+        }
+        return start(
+            config.id,
             destination,
-            newBitrate,
-            streamableFile,
-            configuration.disableAudio,
+            rotation,
+            newModel,
+            config.disableAudio,
             extractor,
-            listener,
-            duration,
-            rotation
+            listerImpl,
         )
     }
 
     @Suppress("DEPRECATION")
-    private fun start(
-        id: Int,
-        newWidth: Int,
-        newHeight: Int,
+    private suspend fun start(
+        id: CompressId,
         destination: String,
-        newBitrate: Int,
-        streamableFile: String?,
+        rotation: Int,
+        model: CompressEngineModel,
         disableAudio: Boolean,
         extractor: MediaExtractor,
-        compressionProgressListener: CompressionProgressListener,
-        duration: Long,
-        rotation: Int
-    ): Result {
-
+        listerImpl: CompressListerImpl?,
+    ): CompressResult {
+        val newWidth = model.width.toInt()
+        val newHeight = model.height.toInt()
+        val duration = model.duration.milliseconds
         if (newWidth != 0 && newHeight != 0) {
 
             val cacheFile = File(destination)
@@ -196,7 +192,7 @@ object Compressor {
                 setOutputFileParameters(
                     inputFormat,
                     outputFormat,
-                    newBitrate,
+                    model.bitrate.bps,
                 )
 
                 val decoder: MediaCodec
@@ -285,7 +281,6 @@ object Compressor {
                         var encoderOutputAvailable = true
 
                         loop@ while (decoderOutputAvailable || encoderOutputAvailable) {
-
                             if (!isRunning) {
                                 dispose(
                                     videoIndex,
@@ -295,9 +290,8 @@ object Compressor {
                                     outputSurface,
                                     extractor
                                 )
-
-                                compressionProgressListener.onProgressCancelled(id)
-                                return Result(
+                                listerImpl?.cancelledListener?.invoke(id)
+                                return CompressResult(
                                     id,
                                     success = false,
                                     failureMessage = "The compression has stopped!"
@@ -378,14 +372,12 @@ object Compressor {
 
                                         if (!errorWait) {
                                             outputSurface.drawImage()
-
                                             inputSurface.setPresentationTime(bufferInfo.presentationTimeUs * 1000)
-
-                                            compressionProgressListener.onProgressChanged(
-                                                id,
-                                                bufferInfo.presentationTimeUs.toFloat() / duration.toFloat() * 100
-                                            )
-
+                                            listerImpl?.progressListener?.let {
+                                                val progress =
+                                                    bufferInfo.presentationTimeUs.toFloat() / duration.toFloat() * 100
+                                                it.invoke(id, progress)
+                                            }
                                             inputSurface.swapBuffers()
                                         }
                                     }
@@ -400,7 +392,7 @@ object Compressor {
 
                 } catch (exception: Exception) {
                     printException(exception)
-                    return Result(id, success = false, failureMessage = exception.message)
+                    return CompressResult(id, success = false, failureMessage = exception.message)
                 }
 
                 dispose(
@@ -432,19 +424,19 @@ object Compressor {
 
             var resultFile = cacheFile
 
-            streamableFile?.let {
-                try {
-                    val result = StreamableVideo.start(`in` = cacheFile, out = File(it))
-                    resultFile = File(it)
-                    if (result && cacheFile.exists()) {
-                        cacheFile.delete()
-                    }
-
-                } catch (e: Exception) {
-                    printException(e)
-                }
-            }
-            return Result(
+//            streamableFile?.let {
+//                try {
+//                    val result = StreamableVideo.start(`in` = cacheFile, out = File(it))
+//                    resultFile = File(it)
+//                    if (result && cacheFile.exists()) {
+//                        cacheFile.delete()
+//                    }
+//
+//                } catch (e: Exception) {
+//                    printException(e)
+//                }
+//            }
+            return CompressResult(
                 id,
                 success = true,
                 failureMessage = null,
@@ -453,7 +445,7 @@ object Compressor {
             )
         }
 
-        return Result(
+        return CompressResult(
             id,
             success = false,
             failureMessage = "Something went wrong, please try again"

@@ -2,7 +2,13 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
     package="com.abedelazizshe.lightcompressor">
-
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.Camera" />
+    <uses-feature android:name="android.hardware.camera.autofocus" /> <!-- Required to run keep-alive service when targeting API 28 or higher -->
     <queries>
         <intent>
             <action android:name="android.media.action.VIDEO_CAPTURE" />
@@ -33,7 +39,7 @@
 
         <activity android:name=".VideoPlayerActivity" />
         <activity
-            android:name=".MainActivity"
+            android:name=".demo.NewActivity"
             android:theme="@style/AppTheme.NoActionBar"
             android:exported="true">
             <intent-filter>
