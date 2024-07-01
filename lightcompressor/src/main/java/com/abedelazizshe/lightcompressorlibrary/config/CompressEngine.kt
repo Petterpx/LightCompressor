@@ -1,8 +1,6 @@
-package com.abedelazizshe.lightcompressorlibrary.echo
+package com.abedelazizshe.lightcompressorlibrary.config
 
-import android.util.Log
 import androidx.annotation.WorkerThread
-import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 
@@ -19,19 +17,20 @@ interface ICompressEngine {
  * 自定义的Echo视频压缩策略
  * 根据width,height,curBit,duration 来计算出合适的压缩配置
  * */
-object EchoVideoCompressEngine : ICompressEngine {
+object VideoDefaultCompressEngine : ICompressEngine {
     private const val MAX_HEIGHT = 1280.00
     private const val MAX_WIDTH = 720.00
     private const val MIN_BITRATE = 2000000
     private const val MAX_BITRATE = 3000000
-    private const val ECHO_BITRATE_SALT = 500000       // 动态加BPS(加盐)
+    private const val ECHO_BITRATE_SALT = 200000       // 动态减BPS(减盐)
     override fun convert(model: CompressEngineModel): CompressEngineModel {
+        // 计算新的比特率，根据分辨率缩减比例，进行减bps
         val (bit, width, height, duration) = model
         val (newW, newH) = resizeToFit(width, height)
         val specific = newW / width
         val newBps = newBps(specific)
         return model.copy(
-            bitrate = Bitrate(newBps),
+            bitrate = Bitrate(min(newBps, bit.bps)),
             width = newW,
             height = newH
         )

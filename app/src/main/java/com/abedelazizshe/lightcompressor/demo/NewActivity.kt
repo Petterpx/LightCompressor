@@ -1,14 +1,13 @@
 package com.abedelazizshe.lightcompressor.demo
 
 import android.annotation.SuppressLint
-import android.net.Uri
 import android.os.Bundle
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import com.abedelazizshe.lightcompressor.databinding.ActivityNewBinding
-import com.abedelazizshe.lightcompressorlibrary.EchoVideoCompressor
-import com.abedelazizshe.lightcompressorlibrary.echo.CompressConfig
-import com.abedelazizshe.lightcompressorlibrary.echo.EchoVideoCompressEngine
+import com.abedelazizshe.lightcompressorlibrary.VideoCompressor
+import com.abedelazizshe.lightcompressorlibrary.config.CompressConfig
+import com.abedelazizshe.lightcompressorlibrary.config.VideoDefaultCompressEngine
 import com.bumptech.glide.Glide
 import com.luck.picture.lib.entity.LocalMedia
 import kotlinx.coroutines.Dispatchers
@@ -23,7 +22,7 @@ class NewActivity : AppCompatActivity() {
     private lateinit var bing: ActivityNewBinding
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        EchoVideoCompressor.context = applicationContext
+        VideoCompressor.init(applicationContext)
         bing = ActivityNewBinding.inflate(layoutInflater)
         setContentView(bing.root)
         var newPath = ""
@@ -49,8 +48,8 @@ class NewActivity : AppCompatActivity() {
         bing.btnCompress.setOnClickListener {
             bing.progress.progress = 0
             lifecycleScope.launch(Dispatchers.IO) {
-                val config = CompressConfig(newPath, compressEngine = EchoVideoCompressEngine)
-                val path = EchoVideoCompressor.start(config).path
+                val config = CompressConfig(newPath, compressEngine = VideoDefaultCompressEngine)
+                val path = VideoCompressor.start(config, enableDebug = true).path
                 withContext(Dispatchers.Main) {
                     val result = LocalMedia.generateLocalMedia(this@NewActivity, path)
                     val builder = StringBuilder()

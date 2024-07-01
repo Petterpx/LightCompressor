@@ -3,11 +3,11 @@ package com.abedelazizshe.lightcompressorlibrary
 import android.annotation.SuppressLint
 import android.content.Context
 import com.abedelazizshe.lightcompressorlibrary.compressor.Compressor
-import com.abedelazizshe.lightcompressorlibrary.echo.CompressLister
-import com.abedelazizshe.lightcompressorlibrary.echo.CompressListerImpl
-import com.abedelazizshe.lightcompressorlibrary.echo.CompressConfig
-import com.abedelazizshe.lightcompressorlibrary.echo.checkOrCreateFolderFile
-import com.abedelazizshe.lightcompressorlibrary.echo.convertSafePath
+import com.abedelazizshe.lightcompressorlibrary.config.CompressLister
+import com.abedelazizshe.lightcompressorlibrary.config.CompressListerImpl
+import com.abedelazizshe.lightcompressorlibrary.config.CompressConfig
+import com.abedelazizshe.lightcompressorlibrary.config.checkOrCreateFolderFile
+import com.abedelazizshe.lightcompressorlibrary.config.convertSafePath
 import com.abedelazizshe.lightcompressorlibrary.video.CompressResult
 import com.luck.picture.lib.entity.LocalMedia
 import java.io.File
@@ -24,13 +24,6 @@ object VideoCompressor {
 
     fun init(context: Context) {
         this.context = context
-    }
-
-    private fun defaultOutputPath(): String {
-        val fileParent = context.filesDir.absolutePath
-        fileParent.checkOrCreateFolderFile()
-        val file = File(fileParent, "compress-${System.currentTimeMillis()}.mp4")
-        return file.absolutePath
     }
 
     suspend fun start(
@@ -98,6 +91,13 @@ object VideoCompressor {
                     "- compressPath: ${result.path}\n" +
                     "\n"
         )
+    }
+
+    private fun defaultOutputPath(): String {
+        val fileParent = context.filesDir.absolutePath
+        fileParent.checkOrCreateFolderFile()
+        val file = File(fileParent, "compress-${System.currentTimeMillis()}.mp4")
+        return file.absolutePath
     }
 
     private fun checkOrDeleteCompressTempFile(originPath: String, tempPath: String): Boolean {

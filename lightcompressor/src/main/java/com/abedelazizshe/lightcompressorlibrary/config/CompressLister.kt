@@ -1,6 +1,4 @@
-package com.abedelazizshe.lightcompressorlibrary.echo
-
-import androidx.annotation.WorkerThread
+package com.abedelazizshe.lightcompressorlibrary.config
 
 
 typealias CompressStartListener = suspend (CompressId) -> Unit

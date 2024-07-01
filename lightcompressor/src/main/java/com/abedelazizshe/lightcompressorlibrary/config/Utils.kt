@@ -1,4 +1,4 @@
-package com.abedelazizshe.lightcompressorlibrary.echo
+package com.abedelazizshe.lightcompressorlibrary.config
 
 import android.content.Context
 import android.database.Cursor

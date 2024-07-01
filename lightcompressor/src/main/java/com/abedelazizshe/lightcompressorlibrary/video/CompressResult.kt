@@ -1,6 +1,6 @@
 package com.abedelazizshe.lightcompressorlibrary.video
 
-import com.abedelazizshe.lightcompressorlibrary.echo.CompressId
+import com.abedelazizshe.lightcompressorlibrary.config.CompressId
 
 data class CompressResult(
     val id: CompressId,

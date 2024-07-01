@@ -1,4 +1,4 @@
-package com.abedelazizshe.lightcompressorlibrary.echo
+package com.abedelazizshe.lightcompressorlibrary.config
 
 import java.io.File
 
@@ -18,7 +18,7 @@ data class CompressOutputConfig(val path: String, val fileName: String) {
 data class CompressConfig(
     val filePath: String,
     val id: CompressId = CompressId(filePath),
-    val compressEngine: ICompressEngine,
+    val compressEngine: ICompressEngine = VideoDefaultCompressEngine,
     var disableAudio: Boolean = false,
     val outPathConfig: CompressOutputConfig? = null,
 )
